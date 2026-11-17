@@ -1161,6 +1161,16 @@ class ClientSession:
                 f"got {ssl!r} instead."
             )
 
+        # Limit only explicitly bounded WebSocket handshakes. Keep the
+        # original request arguments unchanged when no override is needed.
+        timeout_kwargs: dict[str, ClientTimeout] = {}
+        if ws_timeout.ws_connect is not None and ws_timeout.ws_connect > 0:
+            total = self._timeout.total
+            if not total or ws_timeout.ws_connect < total:
+                timeout_kwargs["timeout"] = dataclasses.replace(
+                    self._timeout, total=ws_timeout.ws_connect
+                )
+
         # send request
         resp = await self.request(
             method,
@@ -1172,6 +1182,7 @@ class ClientSession:
             ssl=ssl,
             server_hostname=server_hostname,
             proxy_headers=proxy_headers,
+            **timeout_kwargs,
         )
 
         try:

@@ -1985,3 +1985,60 @@ async def test_tail_bounded_while_a_trace_callback_suspends(
                     assert tail_at_pause, "the buffer was never bounded"
                     # One read may already be in flight when the pause lands.
                     assert tail_at_pause[0] <= 2 * DEFAULT_CHUNK_SIZE
+
+
+async def test_ws_connect_handshake_timeout(
+    aiohttp_client: AiohttpClient,
+) -> None:
+    """A WebSocket-specific deadline bounds a stalled HTTP upgrade."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        await asyncio.sleep(0.25)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", handler)
+    client = await aiohttp_client(app)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await client.ws_connect("/", timeout=ClientWSTimeout(ws_connect=0.02))
+    assert not client.session.connector._acquired
+
+
+async def test_ws_connect_handshake_timeout_success(
+    aiohttp_client: AiohttpClient,
+) -> None:
+    """A healthy upgrade succeeds with a finite connect deadline."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", handler)
+    client = await aiohttp_client(app)
+    ws = await client.ws_connect("/", timeout=ClientWSTimeout(ws_connect=1))
+    assert not ws.closed
+    await ws.close()
+
+
+async def test_ws_connect_handshake_timeout_respects_session_limit(
+    aiohttp_client: AiohttpClient,
+) -> None:
+    """WebSocket timeout never lengthens the existing session deadline."""
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        await asyncio.sleep(0.25)
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/", handler)
+    client = await aiohttp_client(app, timeout=aiohttp.ClientTimeout(total=0.02))
+    with pytest.raises(asyncio.TimeoutError):
+        await client.ws_connect("/", timeout=ClientWSTimeout(ws_connect=10))

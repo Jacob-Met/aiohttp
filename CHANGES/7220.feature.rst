@@ -1,0 +1,2 @@
+WebSocket clients can now set a separate opening handshake timeout without
+extending shorter session timeouts -- by :user:`Jacob-Met`.

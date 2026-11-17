@@ -2239,10 +2239,17 @@ Utilities
       :class:`float`, ``None`` by default.
 
 
-.. class:: ClientWSTimeout(*, ws_receive=None, ws_close=None)
+.. class:: ClientWSTimeout(*, ws_receive=None, ws_close=None, ws_connect=None)
    :canonical: aiohttp.client_ws.ClientWSTimeout
 
    A data class for websocket client timeout settings.
+
+   .. attribute:: ws_connect
+
+      Maximum number of seconds for opening a WebSocket connection, including
+      connecting to the server and receiving its HTTP upgrade response.
+      By default, the session's :class:`ClientTimeout` is used. A shorter
+      session timeout still takes precedence.
 
    .. attribute:: ws_receive
 

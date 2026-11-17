@@ -44,6 +44,7 @@ _DecodeText = TypeVar("_DecodeText", bound=bool, covariant=True, default=Literal
 class ClientWSTimeout:
     ws_receive: float | None = None
     ws_close: float | None = None
+    ws_connect: float | None = None
 
 
 DEFAULT_WS_CLIENT_TIMEOUT: Final[ClientWSTimeout] = ClientWSTimeout(

@@ -45,6 +45,7 @@ async def test_ws_connect(ws_key: str, key_data: bytes) -> None:
     assert isinstance(res, client.ClientWebSocketResponse)
     assert res.protocol == "chat"
     assert hdrs.ORIGIN not in m_req.call_args[1]["headers"]
+    assert "timeout" not in m_req.call_args.kwargs
 
 
 async def test_ws_connect_read_timeout_is_reset_to_inf(
