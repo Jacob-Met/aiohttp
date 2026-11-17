@@ -215,10 +215,17 @@ The client session supports the context manager protocol for self closing.
                                      automatic redirection is enabled (``True`` by
                                      default).
 
-      Non-UTF-8 bytes in malformed ``Location`` headers are preserved by
-      percent-encoding the original bytes before parsing the redirect URL.
-      Valid UTF-8 and existing percent-encoded characters are preserved.
-      The response headers themselves are not modified.
+      When a ``Location`` header contains invalid UTF-8 bytes, the
+      ``fallback_charset_resolver`` is called with the response and the raw
+      header value to allow legacy encodings (for example, Latin-1). If the
+      returned charset cannot decode the value, the raw bytes are
+      percent-encoded instead of being silently replaced. Valid UTF-8 and
+      existing percent-encoded characters are preserved. The response
+      headers themselves are not modified.
+
+      When a legacy charset successfully decodes a redirect, its URL is
+      percent-encoded as UTF-8 even if ``requote_redirect_url=False``.
+      The server's legacy encoding cannot be sent directly as a URL.
 
       .. versionadded:: 3.5
 

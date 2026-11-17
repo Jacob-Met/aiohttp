@@ -7158,3 +7158,73 @@ async def test_redirect_preserves_non_utf8_location_path(
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.parametrize(
+    ("legacy_path", "expected_path", "charset"),
+    [
+        (b"/synspr\xf8ve", b"/synspr%C3%B8ve", "latin-1"),
+        (b"/price\x80", b"/price%E2%82%AC", "cp1252"),
+    ],
+)
+@pytest.mark.parametrize("requote", [True, False])
+async def test_redirect_uses_charset_resolver_for_invalid_utf8_location(
+    requote: bool,
+    legacy_path: bytes,
+    expected_path: bytes,
+    charset: str,
+) -> None:
+    """A configured charset resolver can recover a legacy-encoded redirect."""
+    requests: list[bytes] = []
+    charset_inputs: list[tuple[int, bytes]] = []
+
+    def resolve_charset(resp: aiohttp.ClientResponse, body: bytes) -> str:
+        charset_inputs.append((resp.status, body))
+        return charset
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            line = await reader.readline()
+            path = line.split(b" ")[1]
+            requests.append(path)
+            await reader.readuntil(b"\r\n\r\n")
+            if path == b"/start":
+                body = (
+                    b"HTTP/1.1 302 Found\r\nLocation: "
+                    + legacy_path
+                    + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            elif path == expected_path:
+                body = (
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                    b"Connection: close\r\n\r\nok"
+                )
+            else:
+                body = (
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+            writer.write(body)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    try:
+        assert server.sockets
+        port = server.sockets[0].getsockname()[1]
+        async with (
+            aiohttp.ClientSession(
+                fallback_charset_resolver=resolve_charset,
+                requote_redirect_url=requote,
+            ) as session,
+            session.get(f"http://127.0.0.1:{port}/start") as resp,
+        ):
+            assert resp.status == 200
+            assert await resp.read() == b"ok"
+        assert requests == [b"/start", expected_path]
+        assert charset_inputs == [(302, legacy_path)]
+    finally:
+        server.close()
+        await server.wait_closed()

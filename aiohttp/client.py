@@ -894,9 +894,24 @@ class ClientSession:
                             if r_url.isascii()
                             else r_url.translate(_LOCATION_PERCENT_ENCODE_BYTES)
                         )
+                        decoded_legacy_location = False
+                        if location_url != r_url:
+                            raw_location = r_url.encode("utf-8", "surrogateescape")
+                            charset = self._resolve_charset(resp, raw_location)
+                            try:
+                                location_url = raw_location.decode(charset)
+                            except UnicodeDecodeError:
+                                # Preserve undecodable octets as %HH, not U+FFFD.
+                                pass
+                            else:
+                                decoded_legacy_location = True
                         try:
                             parsed_redirect_url = URL(
-                                location_url, encoded=not self._requote_redirect_url
+                                location_url,
+                                encoded=not (
+                                    self._requote_redirect_url
+                                    or decoded_legacy_location
+                                ),
                             )
                         except ValueError as e:
                             if req._body is not None:

@@ -1,3 +1,3 @@
-Preserve raw non-UTF-8 bytes in redirect ``Location`` headers as
-percent-encoded octets instead of silently losing path characters -- by
-:user:`Jacob-Met`.
+Preserve invalid UTF-8 ``Location`` octets in client redirects and allow
+legacy redirect URL encodings through ``fallback_charset_resolver`` instead
+of silently replacing path characters -- by :user:`Jacob-Met`.
