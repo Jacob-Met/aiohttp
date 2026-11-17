@@ -1,1 +1,3 @@
-Preserve raw non-UTF-8 bytes in redirect Location headers as percent-encoded octets instead of silently losing path characters -- by :user:`Jacob-Met`.
+Preserve raw non-UTF-8 bytes in redirect ``Location`` headers as
+percent-encoded octets instead of silently losing path characters -- by
+:user:`Jacob-Met`.

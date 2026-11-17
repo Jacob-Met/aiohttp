@@ -7146,12 +7146,14 @@ async def test_redirect_preserves_non_utf8_location_path(
     try:
         assert server.sockets
         port = server.sockets[0].getsockname()[1]
-        async with aiohttp.ClientSession(requote_redirect_url=requote) as session:
-            async with session.get(f"http://127.0.0.1:{port}/start") as resp:
-                assert resp.status == 200
-                assert await resp.read() == b"ok"
-                assert resp.url.raw_path.encode("utf-8") == target_path
-                assert resp.history[0].raw_headers
+        async with (
+            aiohttp.ClientSession(requote_redirect_url=requote) as session,
+            session.get(f"http://127.0.0.1:{port}/start") as resp,
+        ):
+            assert resp.status == 200
+            assert await resp.read() == b"ok"
+            assert resp.url.raw_path.encode("utf-8") == target_path
+            assert resp.history[0].raw_headers
         assert observed == [b"/start", target_path]
     finally:
         server.close()
