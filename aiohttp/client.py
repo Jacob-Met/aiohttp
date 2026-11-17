@@ -175,9 +175,11 @@ _C0_CONTROL_OR_SPACE = "".join(map(chr, range(0x21)))
 _REMOVE_TAB_OR_NEWLINE = str.maketrans("", "", "\t\n\r")
 
 
-# HTTP response header values are decoded with surrogateescape. Preserve
-# non-UTF-8 Location bytes when handing values to the URL parser.
-_LOCATION_LATIN1_BYTES = {0xDC00 + byte: chr(byte) for byte in range(0x80, 0x100)}
+# Header parsers represent invalid UTF-8 bytes as surrogate escapes.
+# Preserve those bytes in Location URLs, without decoding them as Latin-1.
+_LOCATION_PERCENT_ENCODE_BYTES = {
+    0xDC00 + byte: f"%{byte:02X}" for byte in range(0x80, 0x100)
+}
 
 
 def _has_no_authority(location: str, scheme: str) -> bool:
@@ -883,14 +885,14 @@ class ClientSession:
                             # response is forbidden
                             resp.release()
 
-                        # HTTP header parsers preserve invalid UTF-8 bytes as
-                        # surrogate escapes. URL() cannot represent these and
-                        # silently loses them; interpret only those bytes as
-                        # Latin-1 characters before quoting the destination.
+                        # Header parsers preserve invalid UTF-8 octets as
+                        # surrogate escapes. The URL parser would drop those
+                        # surrogates; percent-encode the original bytes so
+                        # redirect destinations are not silently corrupted.
                         location_url = (
                             r_url
                             if r_url.isascii()
-                            else r_url.translate(_LOCATION_LATIN1_BYTES)
+                            else r_url.translate(_LOCATION_PERCENT_ENCODE_BYTES)
                         )
                         try:
                             parsed_redirect_url = URL(

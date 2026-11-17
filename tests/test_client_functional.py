@@ -7087,19 +7087,27 @@ async def test_deprecated_upload_attributes(aiohttp_client: AiohttpClient) -> No
 @pytest.mark.parametrize(
     ("location", "target_path"),
     [
-        (b"/synspr\xf8ve", b"/synspr%C3%B8ve"),
+        (b"/synspr\xf8ve", b"/synspr%F8ve"),
         (b"/synspr\xc3\xb8ve", b"/synspr%C3%B8ve"),
         (b"/synspr%C3%B8ve", b"/synspr%C3%B8ve"),
-        (b"/caf\xc3\xa9-\xf8", b"/caf%C3%A9-%C3%B8"),
+        (b"/caf\xc3\xa9-\xf8", b"/caf%C3%A9-%F8"),
+        (b"/bad\xff", b"/bad%FF"),
         (b"/ordinary", b"/ordinary"),
     ],
-    ids=["legacy-latin1", "utf8", "already-percent-encoded", "mixed", "ascii"],
+    ids=[
+        "legacy-latin1",
+        "utf8",
+        "already-percent-encoded",
+        "mixed",
+        "invalid-ff",
+        "ascii",
+    ],
 )
 @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
 async def test_redirect_preserves_non_utf8_location_path(
     location: bytes, target_path: bytes, absolute: bool
 ) -> None:
-    """A Latin-1 Location preserves its destination in both URI forms."""
+    """Preserve raw non-UTF-8 Location octets when following redirects."""
     observed: list[bytes] = []
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
