@@ -1,0 +1,5 @@
+Fixed spurious ``Task exception was never retrieved`` errors from
+request-body writer tasks when a pooled connection closes during
+``Expect: 100-continue`` uploads. Writer task failures are now
+observed even when the owning request/response resets, replaces or
+terminates the task, including eagerly completed tasks.

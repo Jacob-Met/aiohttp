@@ -414,6 +414,30 @@ class UploadTracker:
         fut.exception()
 
 
+def _observe_writer_task_exception(task: asyncio.Task[None]) -> None:
+    """Retrieve a detached request-body writer's result.
+
+    The exception is still raised if a caller awaits the task. The task's
+    associated protocol has already been failed/closed on a write error.
+    """
+    # Subclasses and unit-test stubs may expose a mock writer rather than a
+    # real asyncio.Future. Do not invoke their coroutine-shaped mock methods.
+    if asyncio.isfuture(task) and not task.cancelled():
+        task.exception()
+
+
+def _detach_writer_task(
+    task: asyncio.Task[None],
+    callback: Callable[[asyncio.Task[None]], None],
+) -> None:
+    """Remove the owner's callback without orphaning a writer failure."""
+    task.remove_done_callback(callback)
+    if task.done():
+        _observe_writer_task_exception(task)
+    else:
+        task.add_done_callback(_observe_writer_task_exception)
+
+
 class ClientResponse(HeadersMixin):
     # Some of these attributes are None when created,
     # but will be set by the start() method.
@@ -499,7 +523,11 @@ class ClientResponse(HeadersMixin):
         if loop.get_debug():
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
 
-    def __reset_writer(self, _: object = None) -> None:
+    def __reset_writer(self, task: asyncio.Task[None] | None = None) -> None:
+        if task is not None:
+            _observe_writer_task_exception(task)
+            if task is not self.__writer:
+                return
         self.__writer = None
         if self._stream_writer is not None:
             self._output_size = self._stream_writer.output_size
@@ -520,13 +548,13 @@ class ClientResponse(HeadersMixin):
     def _writer(self, writer: asyncio.Task[None] | None) -> None:
         """Set the writer task for streaming data."""
         if self.__writer is not None:
-            self.__writer.remove_done_callback(self.__reset_writer)
+            _detach_writer_task(self.__writer, self.__reset_writer)
         self.__writer = writer
         if writer is None:
             return
         if writer.done():
             # The writer is already done, so we can clear it immediately.
-            self.__reset_writer()
+            self.__reset_writer(writer)
         else:
             writer.add_done_callback(self.__reset_writer)
 
@@ -1030,7 +1058,11 @@ class ClientRequestBase:
                 url.user or "", url.password or ""
             )
 
-    def _reset_writer(self, _: object = None) -> None:
+    def _reset_writer(self, task: asyncio.Task[None] | None = None) -> None:
+        if task is not None:
+            _observe_writer_task_exception(task)
+            if task is not self._writer_task:
+                return
         self._writer_task = None
 
     def _get_content_length(self) -> int | None:
@@ -1054,7 +1086,7 @@ class ClientRequestBase:
     @_writer.setter
     def _writer(self, writer: asyncio.Task[None]) -> None:
         if self._writer_task is not None:
-            self._writer_task.remove_done_callback(self._reset_writer)
+            _detach_writer_task(self._writer_task, self._reset_writer)
         self._writer_task = writer
         writer.add_done_callback(self._reset_writer)
 
@@ -1180,6 +1212,9 @@ class ClientRequestBase:
             else:
                 task = asyncio.create_task(coro)
             if task.done():
+                # An eager writer can fail before either request or response
+                # registers its result callback.  Do not orphan that failure.
+                _observe_writer_task_exception(task)
                 task = None
             else:
                 self._writer = task
@@ -1749,10 +1784,15 @@ class ClientRequest(ClientRequestBase):
 
     def _terminate(self) -> None:
         if self._writer_task is not None:
+            task = self._writer_task
             if not self.loop.is_closed():
-                self._writer_task.cancel()
-            self._writer_task.remove_done_callback(self._reset_writer)
+                task.cancel()
+            task.remove_done_callback(self._reset_writer)
             self._writer_task = None
+            if task.done():
+                _observe_writer_task_exception(task)
+            elif not self.loop.is_closed():
+                task.add_done_callback(_observe_writer_task_exception)
 
     async def _on_chunk_request_sent(self, method: str, url: URL, chunk: bytes) -> None:
         for trace in self._traces:

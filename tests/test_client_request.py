@@ -1,7 +1,9 @@
 import asyncio
+import gc
 import hashlib
 import io
 import pathlib
+import sys
 from collections.abc import AsyncIterator, Callable, Iterable
 from http.cookies import BaseCookie, SimpleCookie
 from typing import Protocol, Unpack
@@ -2698,3 +2700,244 @@ async def test_upload_tracker_checkpoint_queue_bounded() -> None:
     # unbounded queue would hold _MAX_UPLOAD_CHECKPOINTS + 2 entries).
     assert len(tracker._checkpoints) == 2
     assert tracker.bytes_written == _MAX_UPLOAD_CHECKPOINTS + 1
+
+
+@pytest.mark.parametrize("owner", ("request", "response"))
+@pytest.mark.parametrize("failure", (ClientConnectionError, RuntimeError))
+async def test_writer_task_failure_is_observed_after_reset(
+    make_client_request: _RequestMaker,
+    conn: mock.Mock,
+    owner: str,
+    failure: type[Exception],
+) -> None:
+    """A task kept only by a writer callback must not log an unhandled error."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+
+        async def fail() -> None:
+            raise failure("write failed")
+
+        task = asyncio.create_task(fail())
+        request = make_client_request("GET", URL("http://example.com/"))
+        if owner == "request":
+            request._writer = task
+        else:
+            response = await request._send(conn)
+            response._writer = task
+
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        if owner == "request":
+            assert request._writer is None
+        else:
+            assert response._writer is None
+
+        del task
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+async def test_terminate_observes_finished_writer_failure(
+    make_client_request: _RequestMaker,
+) -> None:
+    """A finished failing writer can be dropped before its callback runs."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+
+        async def fail() -> None:
+            raise ClientConnectionError("connection closed")
+
+        request = make_client_request("GET", URL("http://example.com/"))
+        task = asyncio.create_task(fail())
+        request._writer = task
+        await asyncio.sleep(0)
+        assert task.done() and not task.cancelled()
+        request._terminate()
+        assert request._writer is None
+
+        del task
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+async def test_replacing_writer_preserves_previous_failure_observer(
+    make_client_request: _RequestMaker,
+) -> None:
+    """Replacement must not drop the old callback and orphan its exception."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+
+        async def fail() -> None:
+            raise ClientConnectionError("previous connection closed")
+
+        async def wait() -> None:
+            await asyncio.sleep(0.1)
+
+        request = make_client_request("GET", URL("http://example.com/"))
+        previous = asyncio.create_task(fail())
+        current = asyncio.create_task(wait())
+        request._writer = previous
+        request._writer = current
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert request._writer is current
+        del previous
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await current
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+async def test_eager_writer_failure_is_observed_before_response_handoff(
+    make_client_request: _RequestMaker, conn: mock.Mock
+) -> None:
+    """Python 3.12+ eager tasks can raise before they are handed to the response."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+        request = make_client_request(
+            "POST", URL("http://example.com/"), expect100=True
+        )
+
+        async def fail_without_suspending(*args: object) -> None:
+            raise ClientConnectionError("eager 100-continue preamble failed")
+
+        with mock.patch.object(request, "_write_bytes", fail_without_suspending):
+            response = await request._send(conn)
+
+        # Both writer owners were bypassed: a synchronous eager failure must
+        # be observed in _send itself before dropping the finished task.
+        if sys.version_info >= (3, 12):
+            assert request._writer is None
+            assert response._writer is None
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert request._writer is None
+        assert response._writer is None
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+    finally:
+        loop.set_exception_handler(handler)
+
+
+async def test_observing_writer_failure_does_not_hide_it_from_awaiter(
+    make_client_request: _RequestMaker,
+) -> None:
+    request = make_client_request("GET", URL("http://example.com/"))
+
+    async def fail() -> None:
+        raise ClientConnectionError("original error for awaiter")
+
+    task = asyncio.create_task(fail())
+    request._writer = task
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert request._writer is None
+    with pytest.raises(ClientConnectionError, match="original error for awaiter"):
+        await task
+
+
+async def test_terminated_pending_writer_is_cancelled_and_observed(
+    make_client_request: _RequestMaker,
+) -> None:
+    request = make_client_request("POST", URL("http://example.com/"))
+
+    async def wait_until_cancelled() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(wait_until_cancelled())
+    request._writer = task
+    await asyncio.sleep(0)
+    request._terminate()
+    assert request._writer is None
+    assert task.cancelling()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_replacing_response_writer_preserves_previous_failure_observer(
+    make_client_request: _RequestMaker,
+    conn: mock.Mock,
+) -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+        request = make_client_request("GET", URL("http://example.com/"))
+        response = await request._send(conn)
+
+        async def fail() -> None:
+            raise ClientConnectionError("earlier response writer failed")
+
+        async def wait() -> None:
+            await asyncio.Event().wait()
+
+        previous = asyncio.create_task(fail())
+        current = asyncio.create_task(wait())
+        response._writer = previous
+        response._writer = current
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert response._writer is current
+
+        del previous
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+
+        current.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await current
+    finally:
+        loop.set_exception_handler(handler)
+
+
+async def test_assigning_already_failed_response_writer_observes_error(
+    make_client_request: _RequestMaker, conn: mock.Mock
+) -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, object]] = []
+    handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+    try:
+        request = make_client_request("GET", URL("http://example.com/"))
+        response = await request._send(conn)
+
+        async def fail() -> None:
+            raise ClientConnectionError("eager response writer failed")
+
+        task = asyncio.create_task(fail())
+        await asyncio.sleep(0)
+        assert task.done() and not task.cancelled()
+        response._writer = task
+        assert response._writer is None
+        del task
+        gc.collect()
+        await asyncio.sleep(0)
+        assert reported == []
+    finally:
+        loop.set_exception_handler(handler)

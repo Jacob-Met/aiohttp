@@ -3,6 +3,7 @@ from __future__ import annotations  # TODO(PY314): Remove
 
 import asyncio
 import datetime
+import gc
 import gzip
 import http.cookies
 import io
@@ -13,6 +14,7 @@ import socket
 import ssl
 import sys
 import tarfile
+import tempfile
 import time
 import zipfile
 import zlib
@@ -100,6 +102,67 @@ def headers_echo_client(
         return await aiohttp_client(app, **kwargs)
 
     return factory
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix domain sockets required")
+async def test_reused_connection_closed_before_expect100_writer_has_no_orphan() -> None:
+    """A failed 100-continue writer is accounted for after a successful retry.
+
+    The first request establishes a pooled connection. On reuse the peer
+    closes it before the next request's writer gets a chance to send headers.
+    """
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    prior_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, ctx: reported.append(ctx))
+
+    async def handler(request: web.Request) -> web.Response:
+        assert await request.read() == b"hello"
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_put("/", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # AF_UNIX names are limited to ~108 bytes; pytest's tmp_path may
+    # include a much longer worker/session prefix.
+    socket_dir = tempfile.TemporaryDirectory(prefix="aiohttp-14079-")
+    socket_path = str(pathlib.Path(socket_dir.name) / "reused.sock")
+    await web.UnixSite(runner, socket_path).start()
+    reused_count = 0
+
+    async def on_reuse(
+        session: aiohttp.ClientSession, context: Any, params: Any
+    ) -> None:
+        nonlocal reused_count
+        reused_count += 1
+        loop.call_soon(reused.transport.close)
+
+    trace = aiohttp.TraceConfig()
+    trace.on_connection_reuseconn.append(on_reuse)
+    connector = aiohttp.UnixConnector(path=socket_path)
+    try:
+        async with aiohttp.ClientSession(
+            connector=connector, trace_configs=[trace]
+        ) as session:
+            async with session.put("http://localhost/", data=b"hello") as res:
+                assert await res.text() == "ok"
+            (reused,) = [
+                protocol for conns in connector._conns.values() for protocol, _ in conns
+            ]
+            async with session.put(
+                "http://localhost/", data=b"hello", expect100=True
+            ) as res:
+                assert await res.text() == "ok"
+        assert reused_count == 1
+        for _ in range(3):
+            await asyncio.sleep(0)
+            gc.collect()
+        assert reported == []
+    finally:
+        loop.set_exception_handler(prior_handler)
+        await runner.cleanup()
+        socket_dir.cleanup()
 
 
 async def test_keepalive_two_requests_success(aiohttp_client: AiohttpClient) -> None:
