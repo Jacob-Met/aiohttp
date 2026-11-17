@@ -215,6 +215,11 @@ The client session supports the context manager protocol for self closing.
                                      automatic redirection is enabled (``True`` by
                                      default).
 
+      Malformed ``Location`` header values containing non-UTF-8 bytes are
+      interpreted using Latin-1 for those bytes before parsing the redirect
+      URL. Valid UTF-8 and existing percent-encoded characters are preserved.
+      The response headers themselves are not modified.
+
       .. versionadded:: 3.5
 
    :param trace_configs: A list of :class:`TraceConfig` instances used for client

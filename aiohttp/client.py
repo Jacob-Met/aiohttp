@@ -175,6 +175,11 @@ _C0_CONTROL_OR_SPACE = "".join(map(chr, range(0x21)))
 _REMOVE_TAB_OR_NEWLINE = str.maketrans("", "", "\t\n\r")
 
 
+# HTTP response header values are decoded with surrogateescape. Preserve
+# non-UTF-8 Location bytes when handing values to the URL parser.
+_LOCATION_LATIN1_BYTES = {0xDC00 + byte: chr(byte) for byte in range(0x80, 0x100)}
+
+
 def _has_no_authority(location: str, scheme: str) -> bool:
     """Tell if a URL with a scheme has no "//" after the scheme.
 
@@ -878,9 +883,14 @@ class ClientSession:
                             # response is forbidden
                             resp.release()
 
+                        # HTTP header parsers preserve invalid UTF-8 bytes as
+                        # surrogate escapes. URL() cannot represent these and
+                        # silently loses them; interpret only those bytes as
+                        # Latin-1 characters before quoting the destination.
+                        location_url = r_url.translate(_LOCATION_LATIN1_BYTES)
                         try:
                             parsed_redirect_url = URL(
-                                r_url, encoded=not self._requote_redirect_url
+                                location_url, encoded=not self._requote_redirect_url
                             )
                         except ValueError as e:
                             if req._body is not None:

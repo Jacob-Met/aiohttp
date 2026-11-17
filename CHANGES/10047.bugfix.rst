@@ -1,0 +1,1 @@
+Preserve non-UTF-8 bytes in redirect Location headers instead of silently losing path characters -- by :user:`Jacob-Met`.

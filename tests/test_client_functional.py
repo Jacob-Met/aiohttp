@@ -7082,3 +7082,63 @@ async def test_deprecated_upload_attributes(aiohttp_client: AiohttpClient) -> No
         with pytest.warns(DeprecationWarning, match="output_size is deprecated"):
             assert resp.output_size >= 1024
         await resp.read()
+
+
+@pytest.mark.parametrize(
+    ("location", "target_path"),
+    [
+        (b"/synspr\xf8ve", b"/synspr%C3%B8ve"),
+        (b"/synspr\xc3\xb8ve", b"/synspr%C3%B8ve"),
+        (b"/synspr%C3%B8ve", b"/synspr%C3%B8ve"),
+        (b"/caf\xc3\xa9-\xf8", b"/caf%C3%A9-%C3%B8"),
+        (b"/ordinary", b"/ordinary"),
+    ],
+    ids=["legacy-latin1", "utf8", "already-percent-encoded", "mixed", "ascii"],
+)
+@pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+async def test_redirect_preserves_non_utf8_location_path(
+    location: bytes, target_path: bytes, absolute: bool
+) -> None:
+    """A Latin-1 Location preserves its destination in both URI forms."""
+    observed: list[bytes] = []
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            request_line = await reader.readline()
+            observed.append(request_line.split(b" ")[1])
+            await reader.readuntil(b"\r\n\r\n")
+            if observed[-1] == b"/start":
+                loc = (
+                    b"http://127.0.0.1:" + str(port).encode() + location
+                    if absolute
+                    else location
+                )
+                response = (
+                    b"HTTP/1.1 302 Found\r\nLocation: "
+                    + loc
+                    + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            elif observed[-1] == target_path:
+                response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+            else:
+                response = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            writer.write(response)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    try:
+        assert server.sockets
+        port = server.sockets[0].getsockname()[1]
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/start") as resp:
+                assert resp.status == 200
+                assert await resp.read() == b"ok"
+                assert resp.url.raw_path == target_path.decode("ascii")
+                assert resp.history[0].raw_headers
+        assert observed == [b"/start", target_path]
+    finally:
+        server.close()
+        await server.wait_closed()
