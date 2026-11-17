@@ -19,11 +19,15 @@ from aiohttp.resolver import (
 
 try:
     import aiodns
+    import pycares
 
     getaddrinfo = hasattr(aiodns.DNSResolver, "getaddrinfo")
 except ImportError:  # pragma: no cover
     aiodns = None  # type: ignore[assignment]
     getaddrinfo = False
+
+# c-ares ares.h, ARES_AI_ADDRCONFIG. pycares does not export ARES_AI_* flags.
+_CARES_AI_ADDRCONFIG = 1 << 6
 
 _AddrInfo4 = list[
     tuple[socket.AddressFamily, None, socket.SocketKind, None, tuple[str, int]]
@@ -174,10 +178,11 @@ async def test_async_resolver_positive_ipv4_lookup() -> None:
         resolver = AsyncResolver()
         real = await resolver.resolve("www.python.org")
         ipaddress.ip_address(real[0]["host"])
+        assert real[0]["flags"] == socket.AI_NUMERICHOST | socket.AI_NUMERICSERV
         mock().getaddrinfo.assert_called_with(
             "www.python.org",
             family=socket.AF_INET,
-            flags=socket.AI_ADDRCONFIG,
+            flags=_CARES_AI_ADDRCONFIG,
             port=0,
             type=socket.SOCK_STREAM,
         )
@@ -197,14 +202,18 @@ async def test_async_resolver_positive_link_local_ipv6_lookup() -> None:
         resolver = AsyncResolver()
         real = await resolver.resolve("www.python.org")
         ipaddress.ip_address(real[0]["host"])
+        assert real[0]["flags"] == socket.AI_NUMERICHOST | socket.AI_NUMERICSERV
         mock().getaddrinfo.assert_called_with(
             "www.python.org",
             family=socket.AF_INET,
-            flags=socket.AI_ADDRCONFIG,
+            flags=_CARES_AI_ADDRCONFIG,
             port=0,
             type=socket.SOCK_STREAM,
         )
-        mock().getnameinfo.assert_called_with(("fe80::1", 0, 0, 3), _NAME_SOCKET_FLAGS)
+        mock().getnameinfo.assert_called_with(
+            ("fe80::1", 0, 0, 3),
+            pycares.ARES_NI_NUMERICHOST | pycares.ARES_NI_NUMERICSERV,
+        )
         await resolver.close()
 
 
@@ -255,7 +264,7 @@ async def test_async_resolver_retries_localhost_without_addrconfig_on_windows(
                 call(
                     "localhost",
                     family=socket.AF_UNSPEC,
-                    flags=socket.AI_ADDRCONFIG,
+                    flags=_CARES_AI_ADDRCONFIG,
                     port=0,
                     type=socket.SOCK_STREAM,
                 ),
@@ -467,7 +476,7 @@ async def test_async_resolver_ipv6_positive_lookup() -> None:
         mock().getaddrinfo.assert_called_with(
             "www.python.org",
             family=socket.AF_INET,
-            flags=socket.AI_ADDRCONFIG,
+            flags=_CARES_AI_ADDRCONFIG,
             port=0,
             type=socket.SOCK_STREAM,
         )

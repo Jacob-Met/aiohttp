@@ -11,11 +11,14 @@ __all__ = ("ThreadedResolver", "AsyncResolver", "DefaultResolver")
 
 try:
     import aiodns
+    import pycares
 
     aiodns_default = hasattr(aiodns.DNSResolver, "getaddrinfo")
+    _CARES_NAME_FLAGS = pycares.ARES_NI_NUMERICHOST | pycares.ARES_NI_NUMERICSERV
 except ImportError:
     aiodns = None  # type: ignore[assignment]
     aiodns_default = False
+    _CARES_NAME_FLAGS = 0
 
 
 _NUMERIC_SOCKET_FLAGS = socket.AI_NUMERICHOST | socket.AI_NUMERICSERV
@@ -23,6 +26,9 @@ _NAME_SOCKET_FLAGS = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
 _AI_ADDRCONFIG = socket.AI_ADDRCONFIG
 if hasattr(socket, "AI_MASK"):
     _AI_ADDRCONFIG &= socket.AI_MASK
+# c-ares ares.h: ARES_AI_ADDRCONFIG is bit 6, distinct from socket.AI_ADDRCONFIG.
+# pycares does not export the ARES_AI_* constants.
+_CARES_AI_ADDRCONFIG = 1 << 6
 _IS_WINDOWS = sys.platform == "win32"
 
 
@@ -129,7 +135,7 @@ class AsyncResolver(AbstractResolver):
                     port=port,
                     type=socket.SOCK_STREAM,
                     family=family,
-                    flags=_AI_ADDRCONFIG,
+                    flags=_CARES_AI_ADDRCONFIG,
                 )
             except aiodns.error.DNSError:
                 if not _is_windows_localhost(host):
@@ -154,7 +160,7 @@ class AsyncResolver(AbstractResolver):
                     # getnameinfo() unconditionally, but performance makes sense.
                     result = await self._resolver.getnameinfo(
                         (address[0].decode("ascii"), *address[1:]),
-                        _NAME_SOCKET_FLAGS,
+                        _CARES_NAME_FLAGS,
                     )
                     resolved_host = result.node
                 else:

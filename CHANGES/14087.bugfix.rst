@@ -1,0 +1,3 @@
+Fixed incorrect c-ares DNS lookup flags in :class:`aiohttp.AsyncResolver`
+that could affect address-family selection and numeric IPv6 link-local
+address handling when using ``aiodns``.
