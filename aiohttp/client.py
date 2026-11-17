@@ -887,7 +887,11 @@ class ClientSession:
                         # surrogate escapes. URL() cannot represent these and
                         # silently loses them; interpret only those bytes as
                         # Latin-1 characters before quoting the destination.
-                        location_url = r_url.translate(_LOCATION_LATIN1_BYTES)
+                        location_url = (
+                            r_url
+                            if r_url.isascii()
+                            else r_url.translate(_LOCATION_LATIN1_BYTES)
+                        )
                         try:
                             parsed_redirect_url = URL(
                                 location_url, encoded=not self._requote_redirect_url
