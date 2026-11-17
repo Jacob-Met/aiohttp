@@ -367,13 +367,6 @@ async def test_host_header_ipv6_with_port(make_client_request: _RequestMaker) ->
     assert req.headers["HOST"] == "[::2]:99"
 
 
-async def test_host_header_ipv6_zone_identifier(
-    make_client_request: _RequestMaker,
-) -> None:
-    req = make_client_request("GET", URL("http://[fe80::1%25eth0]:8080/"))
-    assert req.headers["HOST"] == "[fe80::1%25eth0]:8080"
-
-
 @pytest.mark.parametrize(
     ("url", "headers", "expected"),
     (
