@@ -1470,6 +1470,11 @@ class TCPConnector(BaseConnector):
 
         host = req.url.raw_host
         assert host is not None
+        # RFC 6874 encodes the percent sign in IPv6 zone identifiers as %25.
+        # The socket layer needs the decoded zone, not the URL-escaped host.
+        if ":" in host and "%" in host:
+            host = req.url.host
+            assert host is not None
         # Replace multiple trailing dots with a single one.
         # A trailing dot is only present for fully-qualified domain names.
         # See https://github.com/aio-libs/aiohttp/pull/7364.

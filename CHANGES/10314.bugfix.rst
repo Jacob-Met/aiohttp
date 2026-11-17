@@ -1,0 +1,1 @@
+Restored connections to IPv6 addresses with RFC 6874 percent-encoded zone identifiers. -- by :user:`Jacob-Met`.

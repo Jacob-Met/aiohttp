@@ -949,6 +949,39 @@ async def test_tcp_connector_multiple_hosts_errors(
 
 @pytest.mark.skipif(not HAS_IPV6, reason="IPv6 is not available")
 @pytest.mark.parametrize(
+    ("url", "resolved_host"),
+    (
+        ("http://[fe80::1%25eth0]:8080/", "fe80::1%eth0"),
+        ("http://[fe80::1%252]:8080/", "fe80::1%2"),
+        ("http://[fe80::1%eth0]:8080/", "fe80::1%eth0"),
+        ("http://[::1]:8080/", "::1"),
+        ("https://[fe80::1%25eth0]:8443/", "fe80::1%eth0"),
+    ),
+)
+async def test_tcp_connector_ipv6_zone_identifier(
+    url: str, resolved_host: str, make_client_request: _RequestMaker
+) -> None:
+    req = make_client_request("GET", URL(url), loop=asyncio.get_running_loop())
+    conn = TCPConnector()
+    try:
+        with mock.patch.object(
+            conn, "_wrap_create_connection", return_value=(object(), object())
+        ) as create_connection:
+            await conn._create_direct_connection(req, [], ClientTimeout())
+
+        addr_infos = create_connection.call_args.kwargs["addr_infos"]
+        assert addr_infos[0][4][0] == resolved_host
+        assert addr_infos[0][4][1] == req.url.port
+        if req.is_ssl():
+            assert (
+                create_connection.call_args.kwargs["server_hostname"] == resolved_host
+            )
+    finally:
+        await conn.close()
+
+
+@pytest.mark.skipif(not HAS_IPV6, reason="IPv6 is not available")
+@pytest.mark.parametrize(
     ("happy_eyeballs_delay"),
     [0.1, 0.25, None],
 )
