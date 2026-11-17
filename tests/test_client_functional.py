@@ -7085,14 +7085,14 @@ async def test_deprecated_upload_attributes(aiohttp_client: AiohttpClient) -> No
 
 
 @pytest.mark.parametrize(
-    ("location", "target_path"),
+    ("location", "quoted_path", "verbatim_path"),
     [
-        (b"/synspr\xf8ve", b"/synspr%F8ve"),
-        (b"/synspr\xc3\xb8ve", b"/synspr%C3%B8ve"),
-        (b"/synspr%C3%B8ve", b"/synspr%C3%B8ve"),
-        (b"/caf\xc3\xa9-\xf8", b"/caf%C3%A9-%F8"),
-        (b"/bad\xff", b"/bad%FF"),
-        (b"/ordinary", b"/ordinary"),
+        (b"/synspr\xf8ve", b"/synspr%F8ve", b"/synspr%F8ve"),
+        (b"/synspr\xc3\xb8ve", b"/synspr%C3%B8ve", b"/synspr\xc3\xb8ve"),
+        (b"/synspr%C3%B8ve", b"/synspr%C3%B8ve", b"/synspr%C3%B8ve"),
+        (b"/caf\xc3\xa9-\xf8", b"/caf%C3%A9-%F8", b"/caf\xc3\xa9-%F8"),
+        (b"/bad\xff", b"/bad%FF", b"/bad%FF"),
+        (b"/ordinary", b"/ordinary", b"/ordinary"),
     ],
     ids=[
         "legacy-latin1",
@@ -7104,10 +7104,16 @@ async def test_deprecated_upload_attributes(aiohttp_client: AiohttpClient) -> No
     ],
 )
 @pytest.mark.parametrize("absolute", [False, True], ids=["relative", "absolute"])
+@pytest.mark.parametrize("requote", [True, False], ids=["requote", "verbatim"])
 async def test_redirect_preserves_non_utf8_location_path(
-    location: bytes, target_path: bytes, absolute: bool
+    location: bytes,
+    quoted_path: bytes,
+    verbatim_path: bytes,
+    absolute: bool,
+    requote: bool,
 ) -> None:
-    """Preserve raw non-UTF-8 Location octets when following redirects."""
+    """Raw non-UTF-8 Location bytes survive either redirect quoting policy."""
+    target_path = quoted_path if requote else verbatim_path
     observed: list[bytes] = []
 
     async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -7140,11 +7146,11 @@ async def test_redirect_preserves_non_utf8_location_path(
     try:
         assert server.sockets
         port = server.sockets[0].getsockname()[1]
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(requote_redirect_url=requote) as session:
             async with session.get(f"http://127.0.0.1:{port}/start") as resp:
                 assert resp.status == 200
                 assert await resp.read() == b"ok"
-                assert resp.url.raw_path == target_path.decode("ascii")
+                assert resp.url.raw_path.encode("utf-8") == target_path
                 assert resp.history[0].raw_headers
         assert observed == [b"/start", target_path]
     finally:
